@@ -1,3 +1,4 @@
+import os
 import typing as t
 import pandas as pd
 
@@ -30,10 +31,32 @@ class EpackConfig(SimpleConfig):
     multifile: bool = False
     save_eigs: bool = False
     save_evals: bool = True
+    # Checkpoint the IRL eigenpack in QUDA/MILC partfile format so a restarted
+    # job can read it back instead of re-running the Lanczos.
+    checkpoint: bool = False
+    checkpoint_single_prec: bool = True
+    eig_quda: Outfile | None = None
+
+    @property
+    def checkpoint_stem(self) -> str:
+        """Partfile stem; each rank writes <stem>.vol<NNNN>."""
+        return self.eig_quda.filename
+
+    @property
+    def checkpoint_ready(self) -> bool:
+        """True when a complete checkpoint exists. SaveQudaEigenPack writes
+        <stem>.done only after every rank has finished writing, so a write
+        interrupted by a crash is never mistaken for a good one."""
+        return self.checkpoint and os.path.exists(self.checkpoint_stem + ".done")
+
+    @property
+    def solve(self) -> bool:
+        """True when this job runs the IRL (rather than loading eigenvectors)."""
+        return not (self.load or self.checkpoint_ready)
 
     @property
     def masses(self) -> t.List[str]:
-        return [] if self.load == True else ["zero"]
+        return ["zero"] if self.solve else []
 
 
 def build_input_params(config: EpackConfig) -> HadronsInput:
@@ -45,7 +68,16 @@ def build_input_params(config: EpackConfig) -> HadronsInput:
         epack_path = config.eig.filestem
 
     # Load or generate eigenvectors
-    if config.load:
+    if config.checkpoint_ready:
+        utils.get_logger().info(
+            f"Reusing checkpointed eigenpack {config.checkpoint_stem}"
+        )
+        modules["epack"] = hadmods.quda_epack_read(
+            name="epack",
+            filestem=config.checkpoint_stem,
+            size=str(config.eigs),
+        )
+    elif config.load:
         modules["epack"] = hadmods.epack_load(
             name="epack",
             filestem=epack_path,
@@ -65,6 +97,22 @@ def build_input_params(config: EpackConfig) -> HadronsInput:
             **config.lanczos.to_string(),
         )
     schedule.append("epack")
+
+    # Save the checkpoint immediately after the IRL, before anything else runs.
+    # mass=0: eigenvalues are stored as (0, sqrt(lambda)) and read back as
+    # lambda exactly; ModifyEigenPackMILC applies the quark mass afterwards.
+    if config.solve and config.checkpoint:
+        # Grid's partfile writer does not create directories; make the
+        # checkpoint directory now (input files are written before submission).
+        os.makedirs(os.path.dirname(config.checkpoint_stem) or ".", exist_ok=True)
+        modules["epack_save"] = hadmods.quda_epack_save(
+            name="epack_save",
+            eigen_pack="epack",
+            mass="0.0",
+            output=config.checkpoint_stem,
+            single_prec=str(config.checkpoint_single_prec).lower(),
+        )
+        schedule.append("epack_save")
 
     if config.save_evals:
         eval_path = config.eval.filestem
@@ -131,7 +179,14 @@ def validate_config(config: EpackConfig) -> None:
 
     Validates:
     - If not loading, requires Lanczos parameters and action_name
+    - If checkpointing, requires an eig_quda file entry
     """
+    if config.checkpoint and config.eig_quda is None:
+        raise ValueError(
+            "epack checkpoint: true requires an 'eig_quda' entry under files:"
+        )
+    if config.checkpoint and config.load:
+        raise ValueError("epack checkpoint and load are mutually exclusive")
     if not config.load:
         if config.lanczos is None:
             raise ValueError(

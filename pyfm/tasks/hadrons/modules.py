@@ -172,6 +172,32 @@ def epack_load(name: str, filestem: str, size: str, multifile: str) -> t.Dict:
     }
 
 
+def quda_epack_save(
+    name: str, eigen_pack: str, mass: str, output: str, single_prec: str
+) -> t.Dict:
+    """Write an eigenpack in QUDA/MILC partfile format (<output>.vol<NNNN>,
+    plus <output>.done when complete)."""
+    return {
+        "id": {"name": name, "type": "MUtilities::SaveQudaEigenPack"},
+        "options": {
+            "eigenPack": eigen_pack,
+            "mass": mass,
+            "output": output,
+            "singlePrec": single_prec,
+        },
+    }
+
+
+def quda_epack_read(name: str, filestem: str, size: str, op: str = "") -> t.Dict:
+    """Read a QUDA/MILC partfile eigenpack. Must be read with the same rank
+    count and MPI geometry used to write it. Give ``op`` to recompute the
+    eigenvalues as Rayleigh quotients (and log residuals)."""
+    return {
+        "id": {"name": name, "type": "MUtilities::ReadQudaEigenPack"},
+        "options": {"filestem": filestem, "size": size, "op": op},
+    }
+
+
 def eval_save(name: str, eigen_pack: str, output: str) -> t.Dict:
     return {
         "id": {"name": name, "type": "MUtilities::EigenPackExtractEvals"},

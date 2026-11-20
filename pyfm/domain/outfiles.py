@@ -25,6 +25,7 @@ class Outfile:
             }
 
             name_keys = {
+                "quda": "raw",  # QUDA partfile stem; put {cfg} in the filestem
                 "links": "cfg",
                 "meson": "cfg_gamma_h5",
                 "eig": "cfg_bin",
